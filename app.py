@@ -238,7 +238,7 @@ st.caption("A simple rule-based stock analysis app for a high school capstone pr
 
 with st.sidebar:
     st.header("Search")
-    ticker = st.text_input("Stock ticker", value="AAPL").strip().upper()
+    ticker = st.text_input("Stock ticker", value="MSFT").strip().upper()
     period = st.selectbox(
         "Data period",
         ["6mo", "1y", "2y", "5y"],
@@ -247,6 +247,7 @@ with st.sidebar:
     )
     st.divider()
     st.write("This app uses Yahoo Finance data through `yfinance`.")
+    st.write("Examples: US: MSFT, NVDA, TSLA | Hong Kong: 0700.HK | Canada: SHOP.TO | China: 600519.SS")
 
 if not ticker:
     st.info("Enter a stock ticker to begin.")
