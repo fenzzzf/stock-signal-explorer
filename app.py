@@ -43,15 +43,97 @@ def format_market_cap(value):
 def format_number(value):
     if value is None or pd.isna(value):
         return "N/A"
-    return f"{value:,}"
+    return f"{int(value):,}"
+
+
+def get_risk_level(volatility):
+    if volatility < 20:
+        return "Low Risk"
+    if volatility <= 40:
+        return "Medium Risk"
+    return "High Risk"
+
+
+def get_confidence_score(signal, score):
+    if signal == "Buy":
+        return 90 if score >= 4 else 78
+    if signal == "Avoid":
+        return max(20, min(40, 40 + (score * 5)))
+    return max(40, min(60, 50 + (score * 5)))
+
+
+def get_signal_label(signal):
+    icons = {
+        "Buy": "🟢",
+        "Hold": "🟡",
+        "Avoid": "🔴",
+    }
+    return f"{icons[signal]} {signal}"
+
+
+def build_ai_summary(company_name, indicators, signal):
+    latest_close = indicators["latest_close"]
+    ma50 = indicators["ma50"]
+    ma200 = indicators["ma200"]
+    recent_change = indicators["recent_change"]
+    volatility = indicators["volatility"]
+    pe_ratio = indicators["pe_ratio"]
+
+    ma_parts = []
+    if not pd.isna(ma50):
+        ma_parts.append("above its 50-day moving average" if latest_close > ma50 else "below its 50-day moving average")
+    if not pd.isna(ma200):
+        ma_parts.append("above its 200-day moving average" if latest_close > ma200 else "below its 200-day moving average")
+
+    if ma_parts:
+        trend_sentence = f"{company_name} is currently trading {' and '.join(ma_parts)}, which helps describe the current trend."
+    else:
+        trend_sentence = f"{company_name} does not have enough data for all moving-average comparisons yet."
+
+    if volatility < 20:
+        volatility_text = "low"
+    elif volatility <= 40:
+        volatility_text = "moderate"
+    else:
+        volatility_text = "high"
+
+    if pe_ratio is None or pd.isna(pe_ratio):
+        pe_sentence = "A P/E ratio was not available, so valuation is not included in that part of the analysis."
+    else:
+        pe_sentence = f"The P/E ratio is {pe_ratio:.2f}, which gives a simple valuation reference."
+
+    outlook = {
+        "Buy": "bullish",
+        "Hold": "neutral",
+        "Avoid": "cautious",
+    }[signal]
+
+    return (
+        f"{trend_sentence} The stock changed {recent_change:.2f}% during the selected period, "
+        f"and volatility is {volatility_text} at {volatility:.2f}%. {pe_sentence} "
+        f"Based on the rule-based indicators, the overall outlook is {outlook}."
+    )
 
 
 @st.cache_data(ttl=900)
 def load_stock_data(ticker, period):
     stock = yf.Ticker(ticker)
-    history = stock.history(period=period)
-    info = stock.info
-    return history, info
+    history = pd.DataFrame()
+    info = {}
+    history_error = None
+    info_error = None
+
+    try:
+        history = stock.history(period=period)
+    except Exception as error:
+        history_error = error
+
+    try:
+        info = stock.info or {}
+    except Exception as error:
+        info_error = error
+
+    return history, info, history_error, info_error
 
 
 def calculate_indicators(history, info):
@@ -171,23 +253,36 @@ if not ticker:
     st.stop()
 
 try:
-    history, info = load_stock_data(ticker, period)
+    history, info, history_error, info_error = load_stock_data(ticker, period)
 except Exception as error:
-    st.error(f"Could not load data for {ticker}. Try another ticker.")
-    st.caption(f"Details: {error}")
+    st.error(
+        f"Sorry, the app could not load data for {ticker}. "
+        "Please check the ticker symbol or try again in a few minutes."
+    )
     st.stop()
 
 if history.empty:
-    st.error(f"No recent price data was found for {ticker}. Check the ticker symbol and try again.")
+    st.error(
+        f"Sorry, no recent price data was found for {ticker}. "
+        "Yahoo Finance may be temporarily unavailable, or the ticker symbol may not exist."
+    )
     st.stop()
+
+company_info_unavailable = bool(info_error) or not info
+if company_info_unavailable:
+    st.warning("Company information is temporarily unavailable due to Yahoo Finance rate limits.")
 
 indicators = calculate_indicators(history, info)
 signal, score, summary, reasons = generate_signal(indicators)
+risk_level = get_risk_level(indicators["volatility"])
+confidence_score = get_confidence_score(signal, score)
+signal_label = get_signal_label(signal)
 chart_data = indicators["data"][["Close", "MA50", "MA200"]]
 
 company_name = info.get("longName") or info.get("shortName") or ticker
 start_date = history.index.min().date()
 end_date = history.index.max().date()
+ai_summary = build_ai_summary(company_name, indicators, signal)
 
 st.subheader(f"{company_name} ({ticker})")
 st.write(f"Showing data from {start_date} to {end_date}.")
@@ -223,12 +318,21 @@ signal_color = {
     "Avoid": "inverse",
 }[signal]
 
-metric_cols = st.columns(5)
-metric_cols[0].metric("Signal", signal, f"Score: {score}", delta_color=signal_color)
-metric_cols[1].metric("Latest close", format_currency(indicators["latest_close"]))
-metric_cols[2].metric("Recent change", format_percent(indicators["recent_change"]))
-metric_cols[3].metric("Volatility", format_percent(indicators["volatility"]))
-metric_cols[4].metric("P/E ratio", "N/A" if indicators["pe_ratio"] is None else f"{indicators['pe_ratio']:.2f}")
+status_cols = st.columns(3)
+status_cols[0].metric("Signal", signal_label, f"Score: {score}", delta_color=signal_color)
+status_cols[1].metric("Risk Level", risk_level)
+status_cols[2].metric("Confidence", f"{confidence_score}%")
+
+market_cols = st.columns(4)
+market_cols[0].metric("Latest close", format_currency(indicators["latest_close"]))
+market_cols[1].metric("Recent change", format_percent(indicators["recent_change"]))
+market_cols[2].metric("Volatility", format_percent(indicators["volatility"]))
+market_cols[3].metric("P/E ratio", "N/A" if indicators["pe_ratio"] is None else f"{indicators['pe_ratio']:.2f}")
+
+st.divider()
+
+st.subheader("AI Investment Summary")
+st.write(ai_summary)
 
 st.divider()
 
