@@ -1,3 +1,9 @@
+# Stock Signal Explorer
+# High School Capstone Project
+# Uses Yahoo Finance data to generate simple Buy / Hold / Avoid signals
+# 我的鸡鸡很大
+
+
 from datetime import date
 
 import pandas as pd
@@ -70,7 +76,8 @@ def get_signal_label(signal):
     }
     return f"{icons[signal]} {signal}"
 
-
+# Create a human-readable AI-style investment summary
+# Based on trend, volatility, valuation, and final signal
 def build_ai_summary(company_name, indicators, signal):
     latest_close = indicators["latest_close"]
     ma50 = indicators["ma50"]
@@ -114,7 +121,8 @@ def build_ai_summary(company_name, indicators, signal):
         f"Based on the rule-based indicators, the overall outlook is {outlook}."
     )
 
-
+# Load stock price history and company information from Yahoo Finance
+# Includes error handling for rate-limit issues
 @st.cache_data(ttl=900)
 def load_stock_data(ticker, period):
     stock = yf.Ticker(ticker)
@@ -135,7 +143,8 @@ def load_stock_data(ticker, period):
 
     return history, info, history_error, info_error
 
-
+# Calculate technical indicators
+# MA50, MA200, volatility, percentage change, and P/E ratio
 def calculate_indicators(history, info):
     data = history.copy()
     data["MA50"] = data["Close"].rolling(window=50).mean()
@@ -162,7 +171,8 @@ def calculate_indicators(history, info):
         "ma200": ma200,
     }
 
-
+# Generate Buy / Hold / Avoid recommendation
+# Uses a simple rule-based scoring system
 def generate_signal(indicators):
     score = 0
     reasons = []
@@ -236,6 +246,7 @@ def generate_signal(indicators):
 st.title("Stock Signal Explorer")
 st.caption("A simple rule-based stock analysis app for a high school capstone project.")
 
+# Sidebar for user input and stock selection
 with st.sidebar:
     st.header("Search")
     ticker = st.text_input("Stock ticker", value="MSFT").strip().upper()
@@ -285,6 +296,7 @@ start_date = history.index.min().date()
 end_date = history.index.max().date()
 ai_summary = build_ai_summary(company_name, indicators, signal)
 
+# Display company profile information
 st.subheader(f"{company_name} ({ticker})")
 st.write(f"Showing data from {start_date} to {end_date}.")
 
