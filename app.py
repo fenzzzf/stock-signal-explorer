@@ -1,8 +1,7 @@
 # Stock Signal Explorer
 # High School Capstone Project
 # Uses Yahoo Finance data to generate simple Buy / Hold / Avoid signals
-# 我的鸡鸡很大
-# 刃是个傻逼
+# 长夜月是我老婆
 
 
 from datetime import date
