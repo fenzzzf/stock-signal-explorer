@@ -1,12 +1,15 @@
 # Stock Signal Explorer
 # High School Capstone Project
 # Uses Yahoo Finance data to generate simple Buy / Hold / Avoid signals
-# 长夜月牛逼
+# 我的鸡鸡很大
+# 刃是个傻逼
 
 
 from datetime import date
+import os
 
 import pandas as pd
+import requests
 import streamlit as st
 import yfinance as yf
 
@@ -76,6 +79,132 @@ def get_signal_label(signal):
     }
     return f"{icons[signal]} {signal}"
 
+
+def get_signal_label(signal):
+    icons = {
+        "Buy": "🟢",
+        "Hold": "🟡",
+        "Avoid": "🔴",
+    }
+    return f"{icons[signal]} {signal}"
+
+
+def get_alpha_vantage_key():
+    key = os.environ.get("ALPHA_VANTAGE_API_KEY")
+    if key:
+        return key
+
+    try:
+        return st.secrets.get("ALPHA_VANTAGE_API_KEY")
+    except Exception:
+        return None
+
+
+def get_period_days(period):
+    period_days = {
+        "6mo": 126,
+        "1y": 252,
+        "2y": 504,
+        "5y": 1260,
+    }
+    return period_days.get(period, 252)
+
+
+def create_demo_history(ticker, period):
+    days = get_period_days(period)
+    dates = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=days)
+    ticker_seed = sum(ord(character) for character in ticker)
+    base_price = 80 + (ticker_seed % 140)
+    trend = ((ticker_seed % 7) - 2) / 1000
+
+    rows = []
+    close = float(base_price)
+    for index, current_date in enumerate(dates):
+        wave = ((index % 19) - 9) / 900
+        close = max(5, close * (1 + trend + wave))
+        open_price = close * (1 - wave / 2)
+        high = max(open_price, close) * 1.012
+        low = min(open_price, close) * 0.988
+        rows.append(
+            {
+                "Open": open_price,
+                "High": high,
+                "Low": low,
+                "Close": close,
+                "Volume": 1_000_000 + ((ticker_seed + index) % 500_000),
+            }
+        )
+
+    return pd.DataFrame(rows, index=dates)
+
+
+def load_alpha_vantage_history(ticker, period, api_key):
+    output_size = "full" if period in ["2y", "5y"] else "compact"
+    response = requests.get(
+        "https://www.alphavantage.co/query",
+        params={
+            "function": "TIME_SERIES_DAILY",
+            "symbol": ticker,
+            "outputsize": output_size,
+            "apikey": api_key,
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+    payload = response.json()
+
+    if "Time Series (Daily)" not in payload:
+        raise ValueError("Alpha Vantage did not return daily price data.")
+
+    rows = []
+    for row_date, values in payload["Time Series (Daily)"].items():
+        rows.append(
+            {
+                "Date": pd.to_datetime(row_date),
+                "Open": float(values["1. open"]),
+                "High": float(values["2. high"]),
+                "Low": float(values["3. low"]),
+                "Close": float(values["4. close"]),
+                "Volume": int(float(values["5. volume"])),
+            }
+        )
+
+    history = pd.DataFrame(rows).sort_values("Date").set_index("Date")
+    return history.tail(get_period_days(period))
+
+
+def load_alpha_vantage_info(ticker, api_key):
+    response = requests.get(
+        "https://www.alphavantage.co/query",
+        params={
+            "function": "OVERVIEW",
+            "symbol": ticker,
+            "apikey": api_key,
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+    payload = response.json()
+
+    if not payload or "Symbol" not in payload:
+        return {}
+
+    market_cap = payload.get("MarketCapitalization")
+    employees = payload.get("FullTimeEmployees")
+    pe_ratio = payload.get("PERatio")
+
+    return {
+        "longName": payload.get("Name"),
+        "sector": payload.get("Sector"),
+        "industry": payload.get("Industry"),
+        "country": payload.get("Country"),
+        "website": payload.get("OfficialSite"),
+        "marketCap": int(market_cap) if market_cap and market_cap.isdigit() else None,
+        "fullTimeEmployees": int(employees) if employees and employees.isdigit() else None,
+        "longBusinessSummary": payload.get("Description"),
+        "trailingPE": float(pe_ratio) if pe_ratio not in [None, "None", "-"] else None,
+    }
+
 # Create a human-readable AI-style investment summary
 # Based on trend, volatility, valuation, and final signal
 def build_ai_summary(company_name, indicators, signal):
@@ -130,6 +259,9 @@ def load_stock_data(ticker, period):
     info = {}
     history_error = None
     info_error = None
+    data_source = "unavailable"
+    data_message = "🔴 Data Unavailable"
+    is_demo_data = False
 
     try:
         history = stock.history(period=period)
@@ -141,7 +273,33 @@ def load_stock_data(ticker, period):
     except Exception as error:
         info_error = error
 
-    return history, info, history_error, info_error
+    if not history.empty:
+        data_source = "yahoo"
+        data_message = "🟢 Yahoo Finance Data"
+        return history, info, history_error, info_error, data_source, data_message, is_demo_data
+
+    api_key = get_alpha_vantage_key()
+    if api_key:
+        try:
+            history = load_alpha_vantage_history(ticker, period, api_key)
+            if not info:
+                info = load_alpha_vantage_info(ticker, api_key)
+            if not history.empty:
+                data_source = "backup"
+                data_message = "🟡 Backup / Demo Data"
+                return history, info, history_error, info_error, data_source, data_message, is_demo_data
+        except Exception as error:
+            history_error = error
+
+    try:
+        history = create_demo_history(ticker, period)
+        data_source = "demo"
+        data_message = "🟡 Backup / Demo Data"
+        is_demo_data = True
+    except Exception as error:
+        history_error = error
+
+    return history, info, history_error, info_error, data_source, data_message, is_demo_data
 
 # Calculate technical indicators
 # MA50, MA200, volatility, percentage change, and P/E ratio
@@ -257,7 +415,7 @@ with st.sidebar:
         help="Longer periods make the 200-day moving average more reliable.",
     )
     st.divider()
-    st.write("This app uses Yahoo Finance data through `yfinance`.")
+    st.write("This app uses Yahoo Finance first, with a backup/demo fallback if live data is unavailable.")
     st.write("Examples: US: MSFT, NVDA, TSLA | Hong Kong: 0700.HK | Canada: SHOP.TO | China: 600519.SS")
 
 if not ticker:
@@ -265,23 +423,23 @@ if not ticker:
     st.stop()
 
 try:
-    history, info, history_error, info_error = load_stock_data(ticker, period)
+    history, info, history_error, info_error, data_source, data_message, is_demo_data = load_stock_data(ticker, period)
 except Exception as error:
     st.error(
-        f"Sorry, the app could not load data for {ticker}. "
-        "Please check the ticker symbol or try again in a few minutes."
+        "Live market data is temporarily unavailable, and demo data could not be created. "
+        "Please try again in a few minutes."
     )
     st.stop()
 
 if history.empty:
     st.error(
-        f"Sorry, no recent price data was found for {ticker}. "
-        "Yahoo Finance may be temporarily unavailable, or the ticker symbol may not exist."
+        "Live market data is temporarily unavailable, and demo data could not be created. "
+        "Please try again in a few minutes."
     )
     st.stop()
 
 company_info_unavailable = bool(info_error) or not info
-if company_info_unavailable:
+if company_info_unavailable and not is_demo_data:
     st.warning("Company information is temporarily unavailable due to Yahoo Finance rate limits.")
 
 indicators = calculate_indicators(history, info)
@@ -299,6 +457,20 @@ ai_summary = build_ai_summary(company_name, indicators, signal)
 # Display company profile information
 st.subheader(f"{company_name} ({ticker})")
 st.write(f"Showing data from {start_date} to {end_date}.")
+
+st.markdown("**Data Source Status**")
+if data_source == "yahoo":
+    st.success(data_message)
+elif data_source in ["backup", "demo"]:
+    st.warning(data_message)
+    if is_demo_data:
+        st.warning(
+            "Live market data is temporarily unavailable. "
+            "The app is showing demo data so the project can still be demonstrated. "
+            "Demo Data — not real market data."
+        )
+else:
+    st.error(data_message)
 
 st.subheader("Company Basic Information")
 basic_info = {
